@@ -84,6 +84,21 @@ impl Token {
 	}
 }
 
+impl fmt::Display for Token {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Token::Delim => write!(f," "),
+			Token::Asterik => write!(f,"*"),
+			Token::Comma => write!(f,","),
+			Token::Num(c) => write!(f,"{}",c),
+			Token::Dash => write!(f,"-"),
+			Token::Slash => write!(f,"/"),
+			Token::Alpha(c) => write!(f,"{}",c),
+			Token::EOF => write!(f,"\n"),
+		}
+	}
+}
+
 struct TokenIter {
 	v: Vec<char>,
 	idx: usize,
@@ -492,6 +507,19 @@ enum FieldType {
 	End,
 }
 
+impl FieldType {
+	fn color(&self) -> &'static str{
+		match self {
+			FieldType::Minute => "\u{001b}[31m",	//red
+			FieldType::Hour => "\u{001b}[32m",	//green
+			FieldType::DayOfMonth => "\u{001b}[33m",	//yellow
+			FieldType::Month => "\u{001b}[34m",	//blue
+			FieldType::DayOfWeek => "\u{001b}[35m", //magenta
+			_ => ""
+		}
+	}
+}
+
 fn respond(req: String, out: &mut TcpStream) -> Result<(),Error> {
 	//handle @xxxx inputs by converting them to equivalent CRON expressions
 	let mapstr = match req.lines().nth(0).unwrap() {
@@ -544,7 +572,7 @@ fn respond(req: String, out: &mut TcpStream) -> Result<(),Error> {
 				return Err(Error::new(ErrorKind::InvalidInput,"Bad CRON"));
 			}
 		};
-		ptr = match state {
+		let newptr = match state {
 			FieldType::Minute => min.from_toks(ptr)?,
 			FieldType::Hour => hrs.from_toks(ptr)?,
 			FieldType::DayOfMonth => dom.from_toks(ptr)?,
@@ -552,6 +580,13 @@ fn respond(req: String, out: &mut TcpStream) -> Result<(),Error> {
 			FieldType::DayOfWeek => dow.from_toks(ptr)?,
 			_ => return Err(Error::new(ErrorKind::InvalidInput,"Bad CRON")),
 		};
+		let mut ptr_ptr = ptr.as_ptr();
+		while ptr_ptr < newptr.as_ptr() {
+			write!(out,"{}{}\u{001b}[0m",state.color(),ptr[0])?;
+			ptr = &ptr[1..];
+			ptr_ptr = ptr.as_ptr();
+		}
+		write!(out,"{}{}\u{001b}[0m",state.color(),ptr[0])?;
 		if matches!(ptr[0],Token::Delim|Token::EOF) {
 			state = match state {
 				FieldType::Minute => FieldType::Hour,
@@ -568,18 +603,20 @@ fn respond(req: String, out: &mut TcpStream) -> Result<(),Error> {
 		return Err(Error::new(ErrorKind::InvalidInput,"Incomplete CRON"));
 	}
 
-	out.write(b"Run\n")?;
+	out.write(b"\nRun\n")?;
 
 	if min.pats.len() == 1 && hrs.pats.len() == 1 && matches!(min.pats[0],Pattern::At(_)) && matches!(hrs.pats[0],Pattern::At(_)) {
-		write!(out,"at {}:{}\n",hrs.pats[0],min.pats[0])?;
+		write!(out,"at {}{}\u{001b}[0m:{}{}\n",FieldType::Hour.color(),hrs.pats[0],FieldType::Minute.color(),min.pats[0])?;
 	} else {
+		write!(out,"{}",FieldType::Minute.color())?;
 		min.print(out)?;
+		write!(out,"{}",FieldType::Hour.color())?;
 		hrs.print(out)?;
 	}
 
 	let mut dom_mon_printed = false;
 	if dom.pats.len() == 1 && mon.pats.len() == 1 && matches!(dom.pats[0],Pattern::At(_)) && matches!(mon.pats[0],Pattern::At(_)) {
-		write!(out,"on {} {}\n",mon.pats[0],dom.pats[0])?;
+		write!(out,"on {}{} {}{}\n",FieldType::Month.color(),mon.pats[0],FieldType::DayOfMonth.color(),dom.pats[0])?;
 		dom_mon_printed = true;
 	}
 	//https://pubs.opengroup.org/onlinepubs/9699919799/utilities/crontab.html
@@ -590,26 +627,34 @@ fn respond(req: String, out: &mut TcpStream) -> Result<(),Error> {
 	match(is_dom_mon_defined,is_dow_defined) {
 		(true,true) => {
 			if !dom_mon_printed {
+				write!(out,"{}",FieldType::DayOfMonth.color())?;
 				dom.print(out)?;
+				write!(out,"{}",FieldType::Month.color())?;
 				mon.print(out)?;
 			}
-			out.write(b"and\n")?;
+			write!(out,"\u{001b}[0mand\n")?;
+			write!(out,"{}",FieldType::DayOfWeek.color())?;
 			dow.print(out)?;
 		},
 		(true,false) => {
 			if !dom_mon_printed {
+				write!(out,"{}",FieldType::DayOfMonth.color())?;
 				dom.print(out)?;
+				write!(out,"{}",FieldType::Month.color())?;
 				mon.print(out)?;
 			}
 		},
 		(false,true) => {
 			if !dom_mon_printed {
+				write!(out,"{}",FieldType::DayOfMonth.color())?;
 				dom.print(out)?;
 			}
+			write!(out,"{}",FieldType::DayOfWeek.color())?;
 			dow.print(out)?;
 		},
 		(false,false) => {
 			if !dom_mon_printed {
+				write!(out,"{}",FieldType::Month.color())?;
 				mon.print(out)?;
 			}
 		},
@@ -634,12 +679,12 @@ fn main() {
 							println!("{}",req);
 							match respond(req.to_string(),&mut stream) {
 								Ok(_) => {
-									let _ = write!(stream,"\n\n\u{1f426} \u{001b}[36;1m@bufrsh\u{001b}[0m ");
 								},
 								Err(e) => {
 									let _ = write!(stream,"{}",e.to_string());
 								},
 							}
+							let _ = write!(stream,"\n\n\u{1f426} \u{001b}[36;1m@bufrsh\u{001b}[0m ");
 							let _ = stream.shutdown(Shutdown::Both);
 						},
 						Err(e) => println!("read ERR: {}",e),
