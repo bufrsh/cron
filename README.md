@@ -1,6 +1,6 @@
 # cron.bufr.sh
 
-A utility web server to translate CRON expressions into plain english. It is
+A utility server to translate CRON expressions into plain english. It is
 intended to use from the comfort of your terminal, and won't work in a web
 browser.
 
